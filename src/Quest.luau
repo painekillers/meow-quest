@@ -1,3 +1,5 @@
+--!strict
+
 local Signal = require(script.Signal)
 local Utils = require(script.Utils)
 local Types = require(script.Types)
@@ -13,15 +15,19 @@ type CompletionState = index<Cnums, "CompletionState">
 
 local QuestModule = {}
 
+local internalStorage: {QuestInternal} = {}
+local namedStorage: {[string]: {QuestInternal}} = {}
+
+-- Quest Class
 local Quest = {} :: QuestInternal
 Quest.__index = Quest
 
-function QuestModule.new(maxProg: number, id: string?, parent: Quest?, weight: number?): Quest
+function QuestModule.new(maxProg: number?, id: string?, parent: Quest?, weight: number?): Quest
 	
 	local self = setmetatable({
 		Id = id,
 		Progress = 0,
-		MaxProgress = maxProg,
+		MaxProgress = maxProg or 100,
 		
 		Children = {},
 		Parent = parent,
@@ -30,16 +36,16 @@ function QuestModule.new(maxProg: number, id: string?, parent: Quest?, weight: n
 		
 		Locked = false,
 		
-		Completed = Signal.new(),
-		ProgressChanged = Signal.new(),
-		ChildAdded = Signal.new(),
-		ChildRemoved = Signal.new(),
-		Destroyed = Signal.new()
+		Completed = Signal.new<<(completionState: CompletionState, msg: Message?) -> ()>>(),
+		ProgressChanged = Signal.new<<(initial: number, final: number, msg: Message?) -> ()>>(),
+		ChildAdded = Signal.new<<(child: any) -> ()>>(),
+		ChildRemoved = Signal.new<<(child: any) -> ()>>(),
+		Destroyed = Signal.new<<(old: any?, new: any?) -> ()>>()
 		
-	} :: Quest, Quest)
+	}, Quest) :: QuestInternal
 	
-	local displayed = Utils.readOnly(self) :: Quest
-		
+	local displayed = Utils.readOnly(self) :: QuestInternal
+	
 	self._internal = self
 	self._external = displayed
 	
@@ -48,14 +54,34 @@ function QuestModule.new(maxProg: number, id: string?, parent: Quest?, weight: n
 	self._boundMessages = {}
 	self._boundSignals = {}
 	
-	return displayed
+	table.insert(internalStorage, self)
+	if self.Id then
+		if not namedStorage[self.Id] then
+			namedStorage[self.Id] = {}
+			
+		end
+		
+		table.insert(namedStorage[self.Id], self)
+	end
+	
+	return displayed :: Quest
+end
+
+function Quest:_receiveMessage(msg: Message, ...: any?)
+	self = self._internal
+	
+	local boundFunctions = self._boundMessages[msg]
+	
+	for _, fn in boundFunctions do
+		fn(...)
+	end
 end
 
 function Quest:_updateParent(parent: Quest?)
 	self = self._internal
 
 	local oldParent = self.Parent
-	self.Parent = parent
+	self.Parent = parent :: QuestInternal?
 
 	self.ParentChanged:Fire(oldParent, parent)
 end
@@ -65,7 +91,7 @@ function Quest:_handleProgressChange(msg: Message?)
 	self = self._internal
 	
 	if self.Progress >= self.MaxProgress then
-		self:Complete(Cnums.CompletionState.Successm, msg)
+		self:Complete(Cnums.CompletionState.Success, msg)
 		
 	end
 end
@@ -135,18 +161,22 @@ function Quest:Complete(completionState: CompletionState, msg: Message?)
 		self:Lock(`Quest {self.Id} locked as LockOnCompletion was true when completion occured`)
 	end
 	
-	self.Parent:_recalculateProgress()
+	if self.Parent then
+		self.Parent:_recalculateProgress()
+	end
 	
 	self.Completed:Fire(completionState, msg)
 end
 
 -- Also recursively destroys all children
 function Quest:Destroy(msg: Message?)
-	self = self._internal
+	self = (self :: QuestInternal)._internal
 	
 	self:Lock(`Quest {self.Id} locked for deletion`)
 	
-	self.Parent:RemoveChildren(table.find(self.Parent.Children, self))
+	if self.Parent then
+		self.Parent:RemoveChildren(table.find(self.Parent.Children, self) or {})
+	end
 	
 	self.Destroyed:Fire(msg)
 	
@@ -154,14 +184,14 @@ function Quest:Destroy(msg: Message?)
 		child:Destroy()
 	end
 	
-	self._cleanUp()
+	self:_cleanUp()
 end
 
 function Quest:RemoveChildren(index: number | {number}): (Quest? | {Quest?})
 	self = self._internal
 	
 	if typeof(index) == "number" then
-		local removed = table.remove(self.Children, index) :: Quest?
+		local removed = table.remove(self.Children, index) :: QuestInternal?
 		
 		if not removed then
 			warn(`Unable to remove child at index {index} because there are only {#self.Children} children`)
@@ -177,11 +207,11 @@ function Quest:RemoveChildren(index: number | {number}): (Quest? | {Quest?})
 		return removed
 	end
 	
-	table.sort(index, function(a, b) return a > b end)
+	table.sort(index, function(a: number, b: number) return a > b end)
 	
 	local removed = {}
 	for _, i in index do
-		table.insert(removed, self:RemoveChildren(i))
+		table.insert(removed, self:RemoveChildren(i) :: Quest?)
 	end
 	
 	return removed
@@ -207,7 +237,7 @@ function Quest:AddChildren(item: Quest | {Quest}): (Quest | {Quest})
 
 		self.ChildAdded:Fire(i)
 		
-		item:_updateParent(self._external)
+		i:_updateParent(self._external)
 		
 		self:_recalculateProgress()
 	end
@@ -215,7 +245,7 @@ function Quest:AddChildren(item: Quest | {Quest}): (Quest | {Quest})
 	return item
 end
 
-function Quest:BindToMessage(msg: Message, callback: (...any?) -> ()): Quest
+function Quest:BindToMessage(msg: Message, callback: (...any?) -> ()): QuestInternal
 	self = self._internal
 	
 	if not self._boundMessages[msg] then
@@ -223,15 +253,19 @@ function Quest:BindToMessage(msg: Message, callback: (...any?) -> ()): Quest
 	end
 	
 	table.insert(self._boundMessages[msg], callback)
+	
+	return self._external
 end
 
-function Quest:BindToSignal<F>(signal: Signal<F>, callback: (F) -> ()): Quest
+function Quest:BindToSignal<F>(signal: Signal<F>, callback: (F) -> ()): QuestInternal
 	self = self._internal
 	
 	table.insert(self._boundSignals, signal:Connect(callback))
+	
+	return self._external
 end
 
-function Quest:ToggleLockOnCompletion(value: boolean?): Quest
+function Quest:ToggleLockOnCompletion(value: boolean?): QuestInternal
 	self = self._internal
 	
 	self.LockOnCompletion = if value ~= nil then value else not self.LockOnCompletion
@@ -239,14 +273,33 @@ function Quest:ToggleLockOnCompletion(value: boolean?): Quest
 	return self._external
 end
 
-function Quest:Lock(reason: string?): Quest
+function Quest:Lock(reason: string?): QuestInternal
 	self = self._internal
 		
 	self.Locked = true
 	
-	self._internal = Utils.readOnly(self._internal, reason or `Quest {self.Id} locked for unspecified reasons`)
+	self._internal = Utils.readOnly(self._internal, reason or `Quest {self.Id} locked for unspecified reasons`) :: QuestInternal
 	
 	return self._external
+end
+
+-- Module Functions
+
+function QuestModule.SendMessage(msg: Message, ...: any?)
+	
+	for _, q in internalStorage do
+		q:_receiveMessage(msg, ...)
+	end
+end
+
+function QuestModule.GetQuestFromId(id: string): {Quest}?
+	
+	return namedStorage[id]
+end
+
+function QuestModule.GetQuests(): {Quest}
+	
+	return Utils.copy(internalStorage) :: {Quest}
 end
 
 return QuestModule
