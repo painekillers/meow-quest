@@ -23,7 +23,6 @@
 --   stravant - July 31st, 2021 - Created the file.                           --
 --------------------------------------------------------------------------------
 
-
 -- The currently idle thread to run the next handler on
 local freeRunnerThread = nil
 
