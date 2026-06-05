@@ -16,6 +16,7 @@ export type Quest = {
 	MaxProgress: number,
 
 	Weight: number?, -- How much its completion contributes to its parent's progress
+	IsComplete: CompletionState,
 
 	Locked: boolean,
 	LockOnCompletion: boolean,
@@ -29,13 +30,19 @@ export type Quest = {
 	
 	Children: {Quest?},
 	Parent: Quest?,
-
-	Increment: (self: Quest, amount: number, msg: Message?) -> (number),
-	Complete: (self: Quest, completionState: CompletionState, msg: Message?) -> (),
+	
+	-- Changes Progress by Amount (Amount is defaulted to 1)
+	Increment: typeof(function(self: Quest, amount: number?, msg: Message?): Quest return 0 end),
+	
+	-- Completes the Quest without editing Progress or calling _handleProgressChange
+	Complete: typeof(function(self: Quest, completionState: CompletionState, msg: Message?) end), 
+	
+	-- Man I think most of these functions are pretty self-explanatory so I'm not gonna bother annotating the rest
+	
 	Destroy: (self: Quest, msg: Message?) -> (),
-	RemoveChildren: (self: Quest, index: number | {number}) -> (Quest? | {Quest?}),
-	AddChildren: (self: Quest, item: Quest | {Quest}) -> (Quest | {Quest}),
-	BindToMessage: (self: Quest, msg: Message, callback: (...any?) -> ()) -> (Quest),
+	RemoveChildren: (self: Quest, index: number | {number} | nil) -> (Quest),
+	AddChildren: (self: Quest, item: Quest, ...Quest) -> (Quest),
+	BindToMessage: (self: Quest, msg: Message, callback: (self: Quest, ...any?) -> ()) -> (Quest),
 	BindToSignal: <F>(self: Quest, signal: Signal<F>, callback: (F) -> ()) -> (Quest),
 	ToggleLockOnCompletion: (self: Quest, value: boolean?) -> (Quest),
 	Lock: (self: Quest, reason: string?) -> (Quest)
@@ -59,6 +66,12 @@ export type QuestInternal =  {
 	
 	_cleanUp: (self: QuestInternal) -> (),
 	
+	-- Doubly Linked List structure for easy removal --
+	
+	_prev: QuestInternal?,
+	_next: QuestInternal?,
+	_removeFromDLL: (self: QuestInternal) -> (),
+	
 	--[[
 	So it turns out we must completely redefine Quest 
 	inside QuestInternal in order to keep them named
@@ -73,6 +86,7 @@ export type QuestInternal =  {
 	MaxProgress: number,
 
 	Weight: number?, -- How much its completion contributes to its parent's progress
+	IsComplete: CompletionState,
 
 	Locked: boolean,
 	LockOnCompletion: boolean,
@@ -87,12 +101,12 @@ export type QuestInternal =  {
 	Children: {QuestInternal?},
 	Parent: QuestInternal?,
 
-	Increment: (self: QuestInternal, amount: number, msg: Message?) -> (number),
+	Increment: (self: QuestInternal, amount: number?, msg: Message?) -> (QuestInternal),
 	Complete: (self: QuestInternal, completionState: CompletionState, msg: Message?) -> (),
 	Destroy: (self: QuestInternal, msg: Message?) -> (),
-	RemoveChildren: (self: QuestInternal, index: number | {number}) -> (QuestInternal? | {QuestInternal?}),
-	AddChildren: (self: QuestInternal, item: QuestInternal | {QuestInternal}) -> (QuestInternal | {QuestInternal}),
-	BindToMessage: (self: QuestInternal, msg: Message, callback: (...any?) -> ()) -> (QuestInternal),
+	RemoveChildren: (self: QuestInternal, index: number | {number} | nil) -> (QuestInternal),
+	AddChildren: (self: QuestInternal, item: QuestInternal, ...QuestInternal) -> (QuestInternal),
+	BindToMessage: (self: QuestInternal, msg: Message, callback: (self: QuestInternal, ...any?) -> ()) -> (QuestInternal),
 	BindToSignal: <F>(self: QuestInternal, signal: Signal<F>, callback: (F) -> ()) -> (QuestInternal),
 	ToggleLockOnCompletion: (self: QuestInternal, value: boolean?) -> (QuestInternal),
 	Lock: (self: QuestInternal, reason: string?) -> (QuestInternal),
